@@ -1,53 +1,8 @@
 # Project Management Module
 
 ## Overview
-This module provides project management functionalities for the content generation framework, including project creation, schema management, and workflow orchestration.
 
-## Components
-- `orchestrator.py`: Main entry point with high-level API
-- `db_operator.py`: Database operations for projects
-- `services/`: Core services (database, template, vector)
-- `extensions/`: Project type extensions
-
-## Repository Setup TODO
-**IMPORTANT**: This repository is currently set up as a local submodule. To properly set it up:
-
-1. Create a GitHub repository at: https://github.com/abc-david/project_management
-2. Push this code to the new repository:
-   ```
-   cd /home/david/python/projects/content_generator/modules/project_management
-   git remote add origin https://github.com/abc-david/project_management.git
-   git push -u origin master
-   ```
-3. Update the submodule URL in the parent project:
-   ```
-   cd /home/david/python/projects/content_generator
-   # Edit .gitmodules to update the URL to: https://github.com/abc-david/project_management.git
-   git submodule sync
-   git submodule update --init --recursive
-   ```
-
-## Installation
-```
-pip install -e .
-```
-
-## Usage
-```python
-from modules.project_management.orchestrator import ProjectOrchestrator
-
-orchestrator = ProjectOrchestrator()
-project_id = await orchestrator.create_project(
-    name="Example Project",
-    description={"content": {"industry": "tech"}, "metadata": {"tags": ["example"]}}
-)
-```
-
-## Dependencies
-- asyncpg
-- psycopg2-binary
-- pydantic
-- typing-extensions
+The Project Management module provides a centralized, modular system for creating and managing projects across the Content Generator framework. This module handles all aspects of project setup, including database schema creation, vector store initialization, and template adaptation.
 
 ## Key Features
 
@@ -249,4 +204,4 @@ The system implements robust error handling:
 - [Project Orchestration Architecture](../../docs/02_Core_Systems/project_orchestration.md)
 - [Database Design](../../docs/Database%20Design.md)
 - [Template Adaptation](../../services/llm/docs/template_adaptation.md)
-- [Database Architecture and Schema Design](docs/database_architecture.md): Learn about the multi-schema approach, project creation workflow, and database design principles.
+- [Database Architecture and Schema Design](docs/database_architecture.md): Learn about the multi-schema approach, project creation workflow, and database design principles. 
