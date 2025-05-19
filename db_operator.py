@@ -21,7 +21,8 @@ from typing import Dict, List, Optional, Union, Any, Literal
 from datetime import datetime
 
 # Import database connector
-from services.database.db_connector import DBConnector, with_db_connection
+from services.database.db_connector import DBConnector
+from services.db_adapter import with_db_connection
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
