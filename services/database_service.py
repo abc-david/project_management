@@ -75,7 +75,7 @@ class ProjectDatabaseService:
             Dict with project ID and schema info
         """
         # Generate a safe schema name
-        schema_name = self._generate_schema_name(project_name)
+        schema_name = await self._generate_schema_name(project_name)
         project_id = str(uuid.uuid4())
         
         # SQL for creating the schema and tables
@@ -83,26 +83,11 @@ class ProjectDatabaseService:
         -- Create schema for the project
         CREATE SCHEMA IF NOT EXISTS {schema_name};
         
-        -- Create object_models table
-        CREATE TABLE IF NOT EXISTS {schema_name}.object_models (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            name VARCHAR(100) NOT NULL UNIQUE,
-            version VARCHAR(20) NOT NULL DEFAULT '1.0',
-            definition JSONB NOT NULL,
-            object_type VARCHAR(50) NOT NULL,
-            description TEXT NOT NULL,
-            use_cases TEXT[] NOT NULL DEFAULT '{{}}',
-            related_models TEXT[] NOT NULL DEFAULT '{{}}',
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-        
         -- Create contents table
         CREATE TABLE IF NOT EXISTS {schema_name}.contents (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             title VARCHAR(255) NOT NULL,
             content_type VARCHAR(100) NOT NULL,
-            object_model_id UUID REFERENCES {schema_name}.object_models(id),
             data JSONB NOT NULL,
             metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             status VARCHAR(50) NOT NULL DEFAULT 'draft',
@@ -110,8 +95,8 @@ class ProjectDatabaseService:
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
         
-        -- Create prompt_adaptation table
-        CREATE TABLE IF NOT EXISTS {schema_name}.prompt_adaptation (
+        -- Create prompts table (simplified from prompt_adaptation)
+        CREATE TABLE IF NOT EXISTS {schema_name}.prompts (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             name VARCHAR(100) NOT NULL UNIQUE,
             engine_type VARCHAR(50) NOT NULL,
@@ -121,20 +106,6 @@ class ProjectDatabaseService:
             use_cases TEXT[] NOT NULL DEFAULT '{{}}',
             version VARCHAR(20) NOT NULL DEFAULT '1.0',
             is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-        );
-        
-        -- Create prompt_history table
-        CREATE TABLE IF NOT EXISTS {schema_name}.prompt_history (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            template_id UUID REFERENCES {schema_name}.prompt_adaptation(id),
-            input_variables JSONB NOT NULL,
-            full_prompt TEXT NOT NULL,
-            response TEXT NOT NULL,
-            operation_name VARCHAR(100) NULL,
-            content_id UUID REFERENCES {schema_name}.contents(id),
-            metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
         );
@@ -151,24 +122,11 @@ class ProjectDatabaseService:
         );
         
         -- Create indexes
-        CREATE INDEX IF NOT EXISTS {schema_name}_object_models_name_idx ON {schema_name}.object_models(name);
-        CREATE INDEX IF NOT EXISTS {schema_name}_object_models_object_type_idx ON {schema_name}.object_models(object_type);
         CREATE INDEX IF NOT EXISTS {schema_name}_contents_content_type_idx ON {schema_name}.contents(content_type);
         CREATE INDEX IF NOT EXISTS {schema_name}_contents_status_idx ON {schema_name}.contents(status);
-        CREATE INDEX IF NOT EXISTS {schema_name}_prompt_templates_name_idx ON {schema_name}.prompt_adaptation(name);
-        CREATE INDEX IF NOT EXISTS {schema_name}_prompt_templates_template_type_idx ON {schema_name}.prompt_adaptation(template_type);
-        CREATE INDEX IF NOT EXISTS {schema_name}_prompt_history_template_id_idx ON {schema_name}.prompt_history(template_id);
-        CREATE INDEX IF NOT EXISTS {schema_name}_prompt_history_created_at_idx ON {schema_name}.prompt_history(created_at);
+        CREATE INDEX IF NOT EXISTS {schema_name}_prompts_name_idx ON {schema_name}.prompts(name);
+        CREATE INDEX IF NOT EXISTS {schema_name}_prompts_template_type_idx ON {schema_name}.prompts(template_type);
         CREATE INDEX IF NOT EXISTS {schema_name}_vocabulary_name_idx ON {schema_name}.vocabulary(name);
-        
-        -- Copy object model templates from public schema
-        INSERT INTO {schema_name}.object_models (
-            name, version, definition, object_type, description, use_cases, created_at, updated_at
-        )
-        SELECT 
-            name, version, definition, object_type, description, use_cases, created_at, updated_at
-        FROM 
-            public.object_model_templates;
         """
         
         # Store settings in the description field since there's no settings column
@@ -307,12 +265,7 @@ class ProjectDatabaseService:
         check_tables_sql = """
         SELECT COUNT(*) FROM information_schema.tables
         WHERE table_schema = $1
-        AND table_name IN ('object_models', 'contents', 'prompt_adaptation', 'prompt_history', 'vocabulary')
-        """
-        
-        # Check if object_models were copied correctly
-        check_models_sql = """
-        SELECT COUNT(*) FROM {}.object_models
+        AND table_name IN ('contents', 'prompts', 'vocabulary')
         """
         
         conn = await self._get_connection()
@@ -328,15 +281,9 @@ class ProjectDatabaseService:
             # Check tables
             table_count = await conn.fetchval(check_tables_sql, schema_name)
             
-            if table_count != 5:
-                logger.error(f"Schema validation failed: Expected 5 tables, found {table_count}")
+            if table_count != 3:
+                logger.error(f"Schema validation failed: Expected 3 tables, found {table_count}")
                 return False
-            
-            # Check if object models were copied
-            models_count = await conn.fetchval(check_models_sql.format(schema_name))
-            
-            if models_count == 0:
-                logger.warning(f"Schema validation warning: No object models found in {schema_name}")
             
             # If we got here, the schema is valid
             logger.info(f"Schema validation successful for project: {project_id}")
@@ -438,15 +385,45 @@ class ProjectDatabaseService:
         finally:
             await conn.close()
     
-    def _generate_schema_name(self, project_name: str) -> str:
+    async def _schema_exists(self, schema_name: str) -> bool:
+        """
+        Check if a schema with the given name already exists.
+        
+        Args:
+            schema_name: Schema name to check
+            
+        Returns:
+            True if schema exists, False otherwise
+        """
+        conn = await self._get_connection()
+        
+        try:
+            # Query information_schema to check if schema exists
+            check_schema_sql = """
+            SELECT COUNT(*) FROM information_schema.schemata 
+            WHERE schema_name = $1
+            """
+            
+            count = await conn.fetchval(check_schema_sql, schema_name)
+            return count > 0
+        except Exception as e:
+            logger.error(f"Error checking if schema exists: {str(e)}")
+            raise
+        finally:
+            await conn.close()
+            
+    async def _generate_schema_name(self, project_name: str) -> str:
         """
         Generate a safe schema name from project name.
+        
+        If a schema with the generated name already exists, append a version
+        suffix (_v2, _v3, etc.) to ensure uniqueness.
         
         Args:
             project_name: Original project name
             
         Returns:
-            Safe schema name
+            Safe and unique schema name
         """
         # Convert to lowercase
         schema_name = project_name.lower()
@@ -457,11 +434,28 @@ class ProjectDatabaseService:
         # Add prefix
         schema_name = f"proj_{schema_name}"
         
-        # Truncate if too long (PostgreSQL has 63 char limit for identifiers)
-        if len(schema_name) > 60:
-            schema_name = schema_name[:60]
+        # Truncate if too long, leaving room for version suffix (PostgreSQL has 63 char limit)
+        if len(schema_name) > 55:  # Reduced length to allow for _vN suffix
+            schema_name = schema_name[:55]
         
         # Ensure it ends with alphanumeric
         schema_name = re.sub(r'_+$', '', schema_name)
+        
+        # Check for existing schema with same name
+        base_name = schema_name
+        version = 2
+        
+        # Use a while loop to find the first available version
+        while await self._schema_exists(schema_name):
+            # Schema exists, add version suffix
+            schema_name = f"{base_name}_v{version}"
+            version += 1
+            
+            # Edge case: If we exceed PostgreSQL's 63 char limit due to suffix
+            if len(schema_name) > 63:
+                # Truncate base_name further to make room for suffix
+                new_base_length = 62 - len(f"_v{version}")
+                base_name = base_name[:new_base_length]
+                schema_name = f"{base_name}_v{version}"
         
         return schema_name 
